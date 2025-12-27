@@ -17,6 +17,7 @@ class BCTEngine:
         self.config = config or {}
         self._node_index: Dict[str, int] = {}
         self.fast_report = bool(self.config.get("fast_report", False))
+        self._step_counter = 0
 
         treasury_conf = dict(self.config.get("treasury", {}))
         if "b0" not in treasury_conf:
@@ -33,6 +34,9 @@ class BCTEngine:
 
     def step(self, context: Any) -> Dict[str, Any]:
         """Run a full sense->score->allocate->act->learn loop."""
+        # advance global step for cooldown timeline
+        self._step_counter += 1
+        self.governor.tick(self._step_counter)
         system_state = self.adapter.get_system_state()
         candidates = list(self.adapter.get_candidates())
 
@@ -88,6 +92,7 @@ class BCTEngine:
             risk_vals=static_risks,
             hard_veto_mask=hard_veto_mask,
             rho_b=rho_b_val,
+            current_step=self._step_counter,
             return_decisions=not self.fast_report,
         )
         if decisions is None:
@@ -142,7 +147,7 @@ class BCTEngine:
         return {
             "system_state": system_state,
             "candidates": candidates,
-            "scores": {nid: per_node[nid]["score"] for nid in candidates},
+            "scores": {} if self.fast_report else {nid: float(scores[id_to_index[nid]]) for nid in candidates},
             "allocations": allocations,
             "beta": beta,
             "phi": phi,

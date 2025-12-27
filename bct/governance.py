@@ -26,6 +26,7 @@ class SafetyGovernor:
         self._cooldowns = np.zeros(16, dtype=np.int64)
         self._reputations = np.full(16, 0.5, dtype=float)
         self._size = 0
+        self._step = 0
 
     def _grow(self, new_cap: int) -> None:
         """Resize storage arrays to at least new_cap elements."""
@@ -42,6 +43,18 @@ class SafetyGovernor:
         self._risks = new_r
         self._cooldowns = new_cd
         self._reputations = new_rep
+
+    def _advance_step(self, current_step: int | None) -> int:
+        """Return the current step counter, optionally advancing to a provided step."""
+        if current_step is None:
+            self._step += 1
+        else:
+            self._step = max(self._step, int(current_step))
+        return self._step
+
+    def tick(self, current_step: int | None = None) -> int:
+        """Advance internal step counter (useful when no safety checks are run)."""
+        return self._advance_step(current_step)
 
     def _ensure_agent(self, agent_id: int, default_rep: float = 0.5) -> int:
         aid = int(agent_id)
@@ -63,8 +76,9 @@ class SafetyGovernor:
         rho_b = max(0.0, min(1.0, float(rho_b)))
         return float(theta_lo + (theta_hi - theta_lo) * rho_b)
 
-    def check_safety(self, agent_id: int, risk_val: float, hard_veto: bool, rho_b: float) -> SafetyDecision:
+    def check_safety(self, agent_id: int, risk_val: float, hard_veto: bool, rho_b: float, current_step: int | None = None) -> SafetyDecision:
         """Update EWMA and return isolation decision."""
+        step = self._advance_step(current_step)
         idx = self._ensure_agent(agent_id)
         risk_val = max(0.0, min(1.0, float(risk_val)))
 
@@ -74,17 +88,17 @@ class SafetyGovernor:
         self._risks[idx] = z
 
         # Maintain cooldown if active
-        cd = int(self._cooldowns[idx])
-        if cd > 0:
-            self._cooldowns[idx] = cd - 1
-            return SafetyDecision(True, f"cooldown({cd})")
+        cd_exp = int(self._cooldowns[idx])
+        if cd_exp > step:
+            remaining = cd_exp - step
+            return SafetyDecision(True, f"cooldown({remaining})")
 
         # Fresh decision
         theta_t = self._theta(rho_b)
         isolated = bool(hard_veto or (z > theta_t))
 
         if isolated:
-            self._cooldowns[idx] = self.cooldown_period
+            self._cooldowns[idx] = step + self.cooldown_period
             reason = "hard_veto" if hard_veto else f"ewma({z:.3f})>theta({theta_t:.3f})"
             return SafetyDecision(True, reason)
 
@@ -128,14 +142,21 @@ class SafetyGovernor:
         hard_veto_mask: Iterable[bool] | None,
         rho_b: float,
         return_decisions: bool = True,
+        current_step: int | None = None,
     ):
         """Vectorized safety check; returns (isolated_mask, decisions?)."""
         ids = list(agent_ids)
         if not ids:
             return np.zeros(0, dtype=bool), [] if return_decisions else None
 
+        step = self._advance_step(current_step)
         risks = np.clip(np.asarray(list(risk_vals), dtype=float), 0.0, 1.0)
-        hard = np.asarray(list(hard_veto_mask), dtype=bool) if hard_veto_mask is not None else np.zeros(len(ids), dtype=bool)
+        if hard_veto_mask is None:
+            hard = np.zeros(len(ids), dtype=bool)
+        else:
+            hard = np.asarray(list(hard_veto_mask), dtype=bool)
+            if hard.shape[0] != len(ids):
+                raise ValueError("hard_veto_mask length must match agent_ids length")
         idxs = np.array([self._ensure_agent(aid) for aid in ids], dtype=int)
 
         # Update EWMA risk
@@ -144,10 +165,7 @@ class SafetyGovernor:
         self._risks[idxs] = z
 
         cds = self._cooldowns[idxs]
-        active_cd = cds > 0
-        # Decrement active cooldowns only for the queried agents
-        if active_cd.any():
-            self._cooldowns[idxs[active_cd]] = cds[active_cd] - 1
+        active_cd = cds > step
 
         theta_t = self._theta(rho_b)
         isolated = hard | active_cd | (z > theta_t)
@@ -155,17 +173,19 @@ class SafetyGovernor:
         # Start cooldown for newly isolated (not already in cooldown and not hard)
         new_iso = isolated & (~active_cd)
         if new_iso.any():
-            self._cooldowns[idxs[new_iso]] = self.cooldown_period
+            self._cooldowns[idxs[new_iso]] = step + self.cooldown_period
 
         if not return_decisions:
             return isolated, None
 
         decisions = []
+        updated_cd = self._cooldowns[idxs]
         for i, iso in enumerate(isolated):
             if hard[i]:
                 reason = "hard_veto"
             elif active_cd[i]:
-                reason = f"cooldown({int(cds[i])})"
+                remaining = max(0, int(updated_cd[i]) - step)
+                reason = f"cooldown({remaining})"
             elif iso:
                 reason = f"ewma({z[i]:.3f})>theta({theta_t:.3f})"
             else:
