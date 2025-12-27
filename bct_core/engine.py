@@ -35,6 +35,14 @@ class BCTEngine:
         system_state = self.adapter.get_system_state()
         candidates = list(self.adapter.get_candidates())
 
+        metrics_result = self.adapter.evaluate_nodes(candidates, context)
+        if isinstance(metrics_result, dict):
+            metrics_by_id = metrics_result
+        elif metrics_result is None:
+            metrics_by_id = {}
+        else:
+            metrics_by_id = {m.node_id: m for m in metrics_result}
+
         scores = np.zeros(len(candidates), dtype=float)
         id_to_index = {cid: idx for idx, cid in enumerate(candidates)}
         id_to_agent = {cid: self._node_index.setdefault(cid, len(self._node_index)) for cid in candidates}
@@ -42,7 +50,9 @@ class BCTEngine:
 
         for idx, node_id in enumerate(candidates):
             agent_id = id_to_agent[node_id]
-            metric = self.adapter.evaluate_node(node_id, context)
+            metric = metrics_by_id.get(node_id)
+            if metric is None:
+                metric = self.adapter.evaluate_node(node_id, context)
             reputation = self.governor.reputation(agent_id)
             decision = self.governor.check_safety(
                 agent_id=agent_id,
@@ -83,18 +93,22 @@ class BCTEngine:
         }
 
         execution_results = self.adapter.execute_allocation(allocations)
-        feedback_list = self.adapter.collect_feedback(execution_results)
+        feedback_list = self.adapter.collect_feedback_batch(execution_results)
 
+        agent_ids_fb = []
+        ig_vals = []
+        risk_vals = []
+        tax_vals = []
         for fb in feedback_list:
             agent_id = id_to_agent.get(fb.node_id, self._node_index.get(fb.node_id))
             if agent_id is None:
                 continue
-            self.governor.update_reputation(
-                agent_id=agent_id,
-                ig=fb.realized_gain,
-                risk=fb.realized_risk,
-                tax=fb.cost_incurred,
-            )
+            agent_ids_fb.append(agent_id)
+            ig_vals.append(fb.realized_gain)
+            risk_vals.append(fb.realized_risk)
+            tax_vals.append(fb.cost_incurred)
+
+        self.governor.batch_update(agent_ids_fb, ig_vals, risk_vals, tax_vals)
 
         return {
             "system_state": system_state,

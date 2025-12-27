@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List
 
 
-@dataclass
+@dataclass(slots=True)
 class SystemState:
     """Snapshot of the global system for a decision step."""
 
@@ -13,7 +13,7 @@ class SystemState:
     system_risk: float
 
 
-@dataclass
+@dataclass(slots=True)
 class NodeMetric:
     """Static or slowly-varying properties about a candidate node."""
 
@@ -24,7 +24,7 @@ class NodeMetric:
     hard_veto: bool
 
 
-@dataclass
+@dataclass(slots=True)
 class ExecutionFeedback:
     """Observed outcomes after an allocation is executed."""
 
@@ -39,20 +39,34 @@ class BCTAdapter(ABC):
 
     @abstractmethod
     def get_system_state(self) -> SystemState:
+        """Return global snapshot for a decision step."""
         ...
 
     @abstractmethod
     def get_candidates(self) -> List[str]:
+        """Return candidate node IDs."""
         ...
 
     @abstractmethod
     def evaluate_node(self, node_id: str, context: Any) -> NodeMetric:
+        """Evaluate a single node. Fallback when batch evaluation is unavailable."""
         ...
 
     @abstractmethod
     def execute_allocation(self, allocations: Dict[str, int]) -> Dict[str, Any]:
+        """Apply allocations to the domain and return any execution artifacts."""
         ...
 
     @abstractmethod
     def collect_feedback(self, execution_results: Dict[str, Any]) -> List[ExecutionFeedback]:
+        """Collect feedback for allocations. Fallback when batch feedback is unavailable."""
         ...
+
+    # Optional batch paths -------------------------------------------------
+    def evaluate_nodes(self, node_ids: List[str], context: Any) -> Dict[str, NodeMetric]:
+        """Batch evaluation; default falls back to per-node evaluation."""
+        return {nid: self.evaluate_node(nid, context) for nid in node_ids}
+
+    def collect_feedback_batch(self, execution_results: Dict[str, Any]) -> List[ExecutionFeedback]:
+        """Batch feedback collection; default falls back to per-node collection."""
+        return self.collect_feedback(execution_results)

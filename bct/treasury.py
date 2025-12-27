@@ -1,4 +1,7 @@
-import math
+from __future__ import annotations
+
+from typing import Optional
+
 import numpy as np
 
 def softmax_stable(x: np.ndarray) -> np.ndarray:
@@ -23,7 +26,8 @@ class BCTTreasury:
     """BCT Treasury implementing Φ(t), β(t), and softmax allocation."""
 
     def __init__(self, b0: int, rho_min: float = 0.1, phi_c: float = 2.5,
-                 k_sig: float = 3.0, r_max: float = 1.0, eps: float = 1e-9):
+                 k_sig: float = 3.0, r_max: float = 1.0, eps: float = 1e-9,
+                 top_k: Optional[int] = None):
         self.b0 = int(b0)
         self.b_rem = int(b0)
         self.rho_min = float(rho_min)
@@ -31,6 +35,7 @@ class BCTTreasury:
         self.k_sig = float(k_sig)
         self.r_max = float(r_max)
         self.eps = float(eps)
+        self.top_k = top_k
 
     def rho_b(self) -> float:
         return float(self.b_rem) / float(self.b0)
@@ -66,12 +71,22 @@ class BCTTreasury:
         # Isolated agents can be encoded as -inf scores; clamp for numerical safety.
         safe_scores = np.where(np.isfinite(scores), scores, -1e12)
 
-        weights = softmax_stable(beta * (safe_scores - np.max(safe_scores)))
+        # Optional top-k softmax to trim long tails for large N.
+        n = len(safe_scores)
+        if self.top_k is not None and n > self.top_k:
+            k = max(1, min(int(self.top_k), n))
+            top_idx = np.argpartition(safe_scores, -k)[-k:]
+            top_scores = safe_scores[top_idx]
+            top_weights = softmax_stable(beta * (top_scores - np.max(top_scores)))
+            weights = np.zeros_like(safe_scores, dtype=float)
+            weights[top_idx] = top_weights
+        else:
+            weights = softmax_stable(beta * (safe_scores - np.max(safe_scores)))
         H = entropy(weights)
 
         # allocate a fraction of remaining budget per round
-        b_step = int(max(1, math.floor(self.b_rem * float(step_frac))))
-        alloc = np.floor(b_step * weights).astype(int)
+        b_step = int(max(1, int(self.b_rem * float(step_frac))))
+        alloc = np.rint(b_step * weights).astype(int)
 
         # minimum-execution safeguard: top-1 gets at least 1 if budget allows
         if alloc.sum() == 0 and self.b_rem >= 1 and len(alloc) > 0:

@@ -70,7 +70,6 @@ class MockDNS:
 
     def update_weights(self, weights: Dict[str, float]) -> None:
         self.last_weights = dict(weights)
-        print("Updating DNS weights...")
 
 
 class CDNTrafficAdapter(BCTAdapter):
@@ -105,6 +104,25 @@ class CDNTrafficAdapter(BCTAdapter):
             hard_veto=hard_veto,
         )
 
+    def evaluate_nodes(self, node_ids: List[str], context: Any) -> Dict[str, NodeMetric]:
+        metrics: Dict[str, NodeMetric] = {}
+        for node_id in node_ids:
+            stats = self.monitor.node_snapshot(node_id)
+            latency = float(stats.get("latency_ms", 0.0))
+            cost_per_gb = float(stats.get("cost_per_gb", 0.0))
+            throughput = float(stats.get("throughput_mbps", 0.0))
+            packet_loss = float(stats.get("packet_loss", 0.0))
+            hard_veto = bool(stats.get("down", False) or packet_loss > 0.5)
+
+            metrics[node_id] = NodeMetric(
+                node_id=node_id,
+                static_risk=max(0.0, min(1.0, latency / 1000.0)),
+                static_tax=max(0.0, min(1.0, cost_per_gb)),
+                predicted_gain=throughput,
+                hard_veto=hard_veto,
+            )
+        return metrics
+
     def execute_allocation(self, allocations: Dict[str, int]) -> Dict[str, Any]:
         total = sum(max(0, v) for v in allocations.values())
         denom = float(total) if total > 0 else float(len(self.monitor.candidate_ids()) or 1)
@@ -117,3 +135,6 @@ class CDNTrafficAdapter(BCTAdapter):
     def collect_feedback(self, execution_results: Dict[str, Any]) -> List[ExecutionFeedback]:
         raw_feedback = execution_results.get("feedback", [])
         return list(raw_feedback)
+
+    def collect_feedback_batch(self, execution_results: Dict[str, Any]) -> List[ExecutionFeedback]:
+        return self.collect_feedback(execution_results)
