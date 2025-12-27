@@ -10,6 +10,7 @@ from bct.sandbox import PytestEnvironment
 from bct_core.adapters.cdn_example import CDNTrafficAdapter
 from bct_core.adapters.code_repair import CodeRepairAdapter
 from bct_core.engine import BCTEngine
+from bct_core.interfaces import NodeMetric
 
 
 def _copy_repo(tmp_path: Path) -> Path:
@@ -84,3 +85,19 @@ def test_code_metrics_wrappers():
     assert rr.hard_veto is True
     tax = metrics.tax_calculation("print('hi')", ["print('hi')"])
     assert tax > 0.0
+
+
+def test_parallel_hard_veto_feedback():
+    adapter = CodeRepairAdapter(repo_path=Path("."), timeout_s=1, parallel_workers=2)
+    adapter._proposals = {"a": "", "b": ""}
+    adapter._last_metrics = {
+        "a": NodeMetric(node_id="a", static_risk=0.1, static_tax=0.2, predicted_gain=0.0, hard_veto=True),
+        "b": NodeMetric(node_id="b", static_risk=0.1, static_tax=0.3, predicted_gain=0.0, hard_veto=True),
+    }
+    allocations = {"a": 1, "b": 1}
+
+    result = adapter.execute_allocation(allocations)
+    feedback = result["feedback"]
+
+    assert len(feedback) == 2
+    assert all(fb.cost_incurred == 1.0 for fb in feedback)

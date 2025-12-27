@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
 import csv
+import json
 import os
 import shutil
 import sys
@@ -39,6 +40,9 @@ def main():
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--timeout", type=int, default=5)
     ap.add_argument("--legacy-loop", action="store_true", help="Use legacy manual treasury/governor loop instead of BCTEngine.")
+    ap.add_argument("--parallel-workers", type=int, default=None, help="Parallel sandbox workers for code repair adapter.")
+    ap.add_argument("--log-level", type=str, default="WARNING", help="Log level for adapter sandbox execution.")
+    ap.add_argument("--include-meta-csv", action="store_true", help="Include feedback meta_data as JSON in CSV output.")
     args = ap.parse_args()
 
     np.random.seed(args.seed)
@@ -71,7 +75,12 @@ def main():
 
 
 def run_engine_loop(args, work_repo: Path, runs_dir: Path, ledger: JsonlLedger, csv_path: Path, agents, agent_ids, best_pass: float, best_cov: float):
-    adapter = CodeRepairAdapter(repo_path=work_repo, timeout_s=args.timeout)
+    adapter = CodeRepairAdapter(
+        repo_path=work_repo,
+        timeout_s=args.timeout,
+        parallel_workers=args.parallel_workers,
+        log_level=args.log_level,
+    )
     engine_conf = {
         "budget": args.budget,
         "treasury": {"rho_min": 0.1, "phi_c": 2.5, "k_sig": 3.0, "r_max": 1.0},
@@ -84,7 +93,10 @@ def run_engine_loop(args, work_repo: Path, runs_dir: Path, ledger: JsonlLedger, 
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["step", "b_rem", "rho_b", "phi", "beta", "H_w", "best_pass", "best_cov", "system_risk", "winner_agent"])
+        header = ["step", "b_rem", "rho_b", "phi", "beta", "H_w", "best_pass", "best_cov", "system_risk", "winner_agent"]
+        if args.include_meta_csv:
+            header.append("feedback_meta_json")
+        w.writerow(header)
 
         for step in range(args.steps):
             proposals = {agent_ids[i]: agents[i].propose().code for i in range(len(agents))}
@@ -120,6 +132,9 @@ def run_engine_loop(args, work_repo: Path, runs_dir: Path, ledger: JsonlLedger, 
                     adapter.history = history
                     best_pass, best_cov = pass_rate, coverage
 
+            row_meta_json = ""
+            if args.include_meta_csv:
+                row_meta_json = json.dumps([fb.meta_data for fb in feedback], ensure_ascii=False)
             ledger.append({
                 "step": step,
                 "b_rem": b_rem,
@@ -136,7 +151,10 @@ def run_engine_loop(args, work_repo: Path, runs_dir: Path, ledger: JsonlLedger, 
                 "winner_agent": winner,
             })
 
-            w.writerow([step, b_rem, rho_b, phi, beta, H_w, best_pass, best_cov, system_risk, winner if winner is not None else ""])
+            row = [step, b_rem, rho_b, phi, beta, H_w, best_pass, best_cov, system_risk, winner if winner is not None else ""]
+            if args.include_meta_csv:
+                row.append(row_meta_json)
+            w.writerow(row)
             f.flush()
 
             if best_pass >= 1.0:
