@@ -18,6 +18,12 @@ class BCTEngine:
         self._node_index: Dict[str, int] = {}
         self.fast_report = bool(self.config.get("fast_report", False))
         self._step_counter = 0
+        # reusable work buffers
+        self._buf_capacity = 0
+        self._gains = np.empty(0, dtype=float)
+        self._static_risks = np.empty(0, dtype=float)
+        self._static_taxes = np.empty(0, dtype=float)
+        self._hard_veto = np.empty(0, dtype=bool)
 
         treasury_conf = dict(self.config.get("treasury", {}))
         if "b0" not in treasury_conf:
@@ -36,11 +42,12 @@ class BCTEngine:
         """Run a full sense->score->allocate->act->learn loop."""
         # advance global step for cooldown timeline
         self._step_counter += 1
-        self.governor.tick(self._step_counter)
         system_state = self.adapter.get_system_state()
         candidates = list(self.adapter.get_candidates())
 
         if not candidates:
+            # still advance governor time even if no candidates are processed
+            self.governor.tick(self._step_counter)
             return {
                 "system_state": system_state,
                 "candidates": [],
@@ -69,11 +76,19 @@ class BCTEngine:
         reputations = self.governor.reputations(agent_ids)
 
         n = len(candidates)
-        gains = np.zeros(n, dtype=float)
-        static_risks = np.zeros(n, dtype=float)
-        static_taxes = np.zeros(n, dtype=float)
+        if n > self._buf_capacity:
+            new_cap = max(n, int(self._buf_capacity * 2) or 16)
+            self._gains = np.empty(new_cap, dtype=float)
+            self._static_risks = np.empty(new_cap, dtype=float)
+            self._static_taxes = np.empty(new_cap, dtype=float)
+            self._hard_veto = np.empty(new_cap, dtype=bool)
+            self._buf_capacity = new_cap
+
+        gains = self._gains[:n]
+        static_risks = self._static_risks[:n]
+        static_taxes = self._static_taxes[:n]
+        hard_veto_mask = self._hard_veto[:n]
         metrics_list = [None] * n
-        hard_veto_mask = np.zeros(n, dtype=bool)
 
         for idx, node_id in enumerate(candidates):
             metric = metrics_by_id.get(node_id)

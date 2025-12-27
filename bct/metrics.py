@@ -1,6 +1,5 @@
 from __future__ import annotations
 import re
-import difflib
 from dataclasses import dataclass
 from typing import List, Tuple
 
@@ -39,15 +38,30 @@ def risk_analysis(patch_code: str) -> RiskResult:
     return RiskResult(max(0.05, soft), False, "heuristic")
 
 def tax_calculation(patch_code: str, history: List[str], lambda_dup: float = 0.8) -> float:
-    """Pigouvian externality tax: penalize redundancy via similarity to history."""
+    """Pigouvian externality tax: penalize redundancy via fast token similarity."""
     if not history:
         return 0.0
     code = patch_code or ""
-    # compare to recent k patches
+
+    def _token_set(s: str, limit: int = 512) -> set[str]:
+        tokens = re.findall(r"\w+", s.lower())
+        return set(tokens[:limit])  # cap size to bound cost
+
+    curr_tokens = _token_set(code)
+    if not curr_tokens:
+        return 0.0
+
     k = min(5, len(history))
     sims = []
     for prev in history[-k:]:
-        r = difflib.SequenceMatcher(a=code, b=prev).ratio()
-        sims.append(r)
+        prev_tokens = _token_set(prev)
+        if not prev_tokens:
+            continue
+        inter = len(curr_tokens & prev_tokens)
+        union = len(curr_tokens | prev_tokens)
+        if union == 0:
+            continue
+        sims.append(inter / union)
+
     sim = max(sims) if sims else 0.0
     return float(lambda_dup * sim)
