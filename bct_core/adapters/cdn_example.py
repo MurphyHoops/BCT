@@ -57,6 +57,7 @@ class MockMonitor:
                     realized_gain=realized_gain,
                     realized_risk=realized_risk,
                     cost_incurred=cost_incurred,
+                    meta_data={"latency_ms": latency, "utilization": utilization, "packet_loss": packet_loss},
                 )
             )
         return feedback

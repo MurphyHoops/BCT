@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 
@@ -32,10 +32,39 @@ class ExecutionFeedback:
     realized_gain: float
     realized_risk: float
     cost_incurred: float
+    meta_data: Dict[str, Any] = field(default_factory=dict)
+
+
+class BaseEnvironment(ABC):
+    """Abstract runtime environment lifecycle for executing proposals/actions."""
+
+    @abstractmethod
+    def setup(self, proposal: Any) -> None:
+        """Prepare environment (e.g., file layout, ports, fixtures) for a proposal."""
+        ...
+
+    @abstractmethod
+    def execute(self) -> Any:
+        """Perform the core action associated with the prepared proposal."""
+        ...
+
+    @abstractmethod
+    def observe(self) -> ExecutionFeedback | List[ExecutionFeedback] | Dict[str, ExecutionFeedback]:
+        """Collect feedback signals after execution."""
+        ...
+
+    @abstractmethod
+    def teardown(self) -> None:
+        """Release any resources allocated during setup/execute."""
+        ...
 
 
 class BCTAdapter(ABC):
-    """Abstract adapter boundary for plugging domain-specific logic into the BCT core."""
+    """Abstract adapter boundary for plugging domain-specific logic into the BCT core.
+
+    Adapters may internally compose a BaseEnvironment for execution, but the engine
+    remains decoupled and only depends on this interface.
+    """
 
     @abstractmethod
     def get_system_state(self) -> SystemState:

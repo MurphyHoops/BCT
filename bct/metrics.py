@@ -65,3 +65,13 @@ def tax_calculation(patch_code: str, history: List[str], lambda_dup: float = 0.8
 
     sim = max(sims) if sims else 0.0
     return float(lambda_dup * sim)
+
+
+class CodeMetrics:
+    """Helper wrapper exposing risk/tax calculations for code patches."""
+
+    def risk_analysis(self, patch_code: str) -> RiskResult:
+        return risk_analysis(patch_code)
+
+    def tax_calculation(self, patch_code: str, history: List[str], lambda_dup: float = 0.8) -> float:
+        return tax_calculation(patch_code, history, lambda_dup=lambda_dup)
