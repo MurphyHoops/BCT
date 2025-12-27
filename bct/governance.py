@@ -22,19 +22,39 @@ class SafetyGovernor:
 
         # agent_id -> index mapping for compact arrays
         self._idx_map = {}
-        self._risks = np.zeros(0, dtype=float)
-        self._cooldowns = np.zeros(0, dtype=np.int64)
-        self._reputations = np.zeros(0, dtype=float)
+        self._risks = np.zeros(16, dtype=float)
+        self._cooldowns = np.zeros(16, dtype=np.int64)
+        self._reputations = np.full(16, 0.5, dtype=float)
+        self._size = 0
+
+    def _grow(self, new_cap: int) -> None:
+        """Resize storage arrays to at least new_cap elements."""
+        cap = max(new_cap, len(self._risks))
+        if cap == len(self._risks):
+            return
+        new_r = np.zeros(cap, dtype=float)
+        new_cd = np.zeros(cap, dtype=np.int64)
+        new_rep = np.full(cap, 0.5, dtype=float)
+        if self._size:
+            new_r[: self._size] = self._risks[: self._size]
+            new_cd[: self._size] = self._cooldowns[: self._size]
+            new_rep[: self._size] = self._reputations[: self._size]
+        self._risks = new_r
+        self._cooldowns = new_cd
+        self._reputations = new_rep
 
     def _ensure_agent(self, agent_id: int, default_rep: float = 0.5) -> int:
         aid = int(agent_id)
         if aid in self._idx_map:
             return self._idx_map[aid]
-        idx = len(self._idx_map)
+        idx = self._size
+        if idx >= len(self._risks):
+            self._grow(max(1, len(self._risks) * 2))
         self._idx_map[aid] = idx
-        self._risks = np.append(self._risks, 0.0)
-        self._cooldowns = np.append(self._cooldowns, 0)
-        self._reputations = np.append(self._reputations, float(default_rep))
+        self._risks[idx] = 0.0
+        self._cooldowns[idx] = 0
+        self._reputations[idx] = float(default_rep)
+        self._size += 1
         return idx
 
     def _theta(self, rho_b: float) -> float:

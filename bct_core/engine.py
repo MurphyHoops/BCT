@@ -35,6 +35,21 @@ class BCTEngine:
         system_state = self.adapter.get_system_state()
         candidates = list(self.adapter.get_candidates())
 
+        if not candidates:
+            return {
+                "system_state": system_state,
+                "candidates": [],
+                "scores": {},
+                "allocations": {},
+                "beta": 0.0,
+                "phi": 0.0,
+                "weights": {},
+                "entropy": 0.0,
+                "execution_results": {},
+                "feedback": [],
+                "per_node": {},
+            }
+
         metrics_result = self.adapter.evaluate_nodes(candidates, context)
         if isinstance(metrics_result, dict):
             metrics_by_id = metrics_result
@@ -43,42 +58,53 @@ class BCTEngine:
         else:
             metrics_by_id = {m.node_id: m for m in metrics_result}
 
-        scores = np.zeros(len(candidates), dtype=float)
         id_to_index = {cid: idx for idx, cid in enumerate(candidates)}
         id_to_agent = {cid: self._node_index.setdefault(cid, len(self._node_index)) for cid in candidates}
-        per_node = {}
+        agent_ids = [id_to_agent[cid] for cid in candidates]
+        reputations = self.governor.reputations(agent_ids)
 
+        n = len(candidates)
+        gains = np.zeros(n, dtype=float)
+        static_risks = np.zeros(n, dtype=float)
+        static_taxes = np.zeros(n, dtype=float)
+        isolated_mask = np.zeros(n, dtype=bool)
+        metrics_list = [None] * n
+        decisions = [None] * n
+
+        rho_b_val = self.treasury.rho_b()
         for idx, node_id in enumerate(candidates):
-            agent_id = id_to_agent[node_id]
+            agent_id = agent_ids[idx]
             metric = metrics_by_id.get(node_id)
             if metric is None:
                 metric = self.adapter.evaluate_node(node_id, context)
-            reputation = self.governor.reputation(agent_id)
+            metrics_list[idx] = metric
+
+            gains[idx] = metric.predicted_gain
+            static_risks[idx] = metric.static_risk
+            static_taxes[idx] = metric.static_tax
+
             decision = self.governor.check_safety(
                 agent_id=agent_id,
                 risk_val=metric.static_risk,
                 hard_veto=metric.hard_veto,
-                rho_b=self.treasury.rho_b(),
+                rho_b=rho_b_val,
             )
+            decisions[idx] = decision
+            isolated_mask[idx] = decision.isolated
 
-            if decision.isolated:
-                score = -1e12
-            else:
-                score = (
-                    metric.predicted_gain
-                    + 0.5 * reputation
-                    - 2.0 * metric.static_risk
-                    - 1.0 * metric.static_tax
-                )
+        scores = gains + 0.5 * reputations - 2.0 * static_risks - 1.0 * static_taxes
+        scores[isolated_mask] = -1e12
 
-            scores[idx] = score
-            per_node[node_id] = {
-                "metric": metric,
-                "reputation": reputation,
-                "decision": decision,
-                "score": score,
-                "agent_id": agent_id,
+        per_node = {
+            node_id: {
+                "metric": metrics_list[idx],
+                "reputation": float(reputations[idx]),
+                "decision": decisions[idx],
+                "score": float(scores[idx]),
+                "agent_id": agent_ids[idx],
             }
+            for idx, node_id in enumerate(candidates)
+        }
 
         allocations_arr, beta, phi, weights, entropy_val = self.treasury.allocate(
             scores=scores,

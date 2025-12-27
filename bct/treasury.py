@@ -94,9 +94,20 @@ class BCTTreasury:
 
         # enforce conservation
         alloc_sum = int(alloc.sum())
+        if alloc_sum > b_step:
+            # scale down to respect per-step cap, trim largest first
+            idx = np.argsort(-alloc)
+            over = alloc_sum - b_step
+            for j in idx:
+                d = min(over, int(alloc[j]))
+                alloc[j] -= d
+                over -= d
+                if over <= 0:
+                    break
+        alloc_sum = int(alloc.sum())
         alloc_sum = min(alloc_sum, self.b_rem)
         if alloc_sum < int(alloc.sum()):
-            # scale down if somehow exceeded (rare with flooring, but keep strict)
+            # scale down if still exceeded remaining budget
             idx = np.argsort(-alloc)
             over = int(alloc.sum()) - alloc_sum
             for j in idx:
