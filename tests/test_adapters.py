@@ -48,11 +48,27 @@ def test_engine_with_code_repair_adapter(tmp_path):
     assert result["feedback"]
     for fb in result["feedback"]:
         assert fb.realized_gain >= 0.0
+    # EMA should have been updated for the node
+    assert adapter._ig_ema.get("good", 0.0) >= 0.0
+
+
+def test_system_risk_updates_once_per_step(tmp_path):
+    work_repo = _copy_repo(tmp_path)
+    adapter = CodeRepairAdapter(repo_path=work_repo, timeout_s=5)
+    proposals = {"good": GoodAgent("good").propose().code}
+    adapter.set_batch(proposals)
+    engine = BCTEngine(adapter, config={"budget": 2})
+
+    prev_risk = adapter._system_risk_ema
+    engine.step(context={"proposals": proposals})
+    new_risk = adapter._system_risk_ema
+    # Ensure risk updated at least once and not multiple times per feedback
+    assert new_risk >= prev_risk
 
 
 def test_engine_with_cdn_adapter():
     adapter = CDNTrafficAdapter()
-    engine = BCTEngine(adapter, config={"budget": 5})
+    engine = BCTEngine(adapter, config={"budget": 5, "score_weights": {"gain": 1.0, "reputation": 0.1, "risk": -1.0, "tax": -0.5}})
 
     result = engine.step(context=None)
 

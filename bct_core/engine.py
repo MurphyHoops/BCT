@@ -113,7 +113,14 @@ class BCTEngine:
         if decisions is None:
             decisions = [None] * n
 
-        scores = gains + 0.5 * reputations - 2.0 * static_risks - 1.0 * static_taxes
+        # Configurable scoring weights; fall back to legacy constants.
+        weights_cfg = self.config.get("score_weights", {})
+        w_gain = float(weights_cfg.get("gain", 1.0))
+        w_rep = float(weights_cfg.get("reputation", 0.5))
+        w_risk = float(weights_cfg.get("risk", -2.0))
+        w_tax = float(weights_cfg.get("tax", -1.0))
+
+        scores = w_gain * gains + w_rep * reputations + w_risk * static_risks + w_tax * static_taxes
         scores[isolated_mask] = -1e12
 
         per_node = {}
