@@ -120,3 +120,55 @@ class SafetyGovernor:
         current = self._reputations[idxs]
         updated = (1.0 - self.eta) * current + self.eta * (ig_arr - risk_arr - tax_arr)
         self._reputations[idxs] = np.maximum(0.0, updated)
+
+    def batch_check_safety(
+        self,
+        agent_ids: Iterable[int],
+        risk_vals: Iterable[float],
+        hard_veto_mask: Iterable[bool] | None,
+        rho_b: float,
+        return_decisions: bool = True,
+    ):
+        """Vectorized safety check; returns (isolated_mask, decisions?)."""
+        ids = list(agent_ids)
+        if not ids:
+            return np.zeros(0, dtype=bool), [] if return_decisions else None
+
+        risks = np.clip(np.asarray(list(risk_vals), dtype=float), 0.0, 1.0)
+        hard = np.asarray(list(hard_veto_mask), dtype=bool) if hard_veto_mask is not None else np.zeros(len(ids), dtype=bool)
+        idxs = np.array([self._ensure_agent(aid) for aid in ids], dtype=int)
+
+        # Update EWMA risk
+        z_prev = self._risks[idxs]
+        z = (1.0 - self.alpha) * z_prev + self.alpha * risks
+        self._risks[idxs] = z
+
+        cds = self._cooldowns[idxs]
+        active_cd = cds > 0
+        # Decrement active cooldowns only for the queried agents
+        if active_cd.any():
+            self._cooldowns[idxs[active_cd]] = cds[active_cd] - 1
+
+        theta_t = self._theta(rho_b)
+        isolated = hard | active_cd | (z > theta_t)
+
+        # Start cooldown for newly isolated (not already in cooldown and not hard)
+        new_iso = isolated & (~active_cd)
+        if new_iso.any():
+            self._cooldowns[idxs[new_iso]] = self.cooldown_period
+
+        if not return_decisions:
+            return isolated, None
+
+        decisions = []
+        for i, iso in enumerate(isolated):
+            if hard[i]:
+                reason = "hard_veto"
+            elif active_cd[i]:
+                reason = f"cooldown({int(cds[i])})"
+            elif iso:
+                reason = f"ewma({z[i]:.3f})>theta({theta_t:.3f})"
+            else:
+                reason = "ok"
+            decisions.append(SafetyDecision(bool(iso), reason))
+        return isolated, decisions

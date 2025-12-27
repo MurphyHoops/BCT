@@ -86,30 +86,18 @@ class BCTTreasury:
 
         # allocate a fraction of remaining budget per round
         b_step = int(max(1, int(self.b_rem * float(step_frac))))
-        alloc = np.rint(b_step * weights).astype(int)
+        target_limit = min(b_step, self.b_rem)
+        alloc = np.rint(target_limit * weights).astype(int)
 
         # minimum-execution safeguard: top-1 gets at least 1 if budget allows
         if alloc.sum() == 0 and self.b_rem >= 1 and len(alloc) > 0:
             alloc[int(np.argmax(safe_scores))] = 1
 
-        # enforce conservation
+        # enforce conservation in one pass
         alloc_sum = int(alloc.sum())
-        if alloc_sum > b_step:
-            # scale down to respect per-step cap, trim largest first
+        if alloc_sum > target_limit:
             idx = np.argsort(-alloc)
-            over = alloc_sum - b_step
-            for j in idx:
-                d = min(over, int(alloc[j]))
-                alloc[j] -= d
-                over -= d
-                if over <= 0:
-                    break
-        alloc_sum = int(alloc.sum())
-        alloc_sum = min(alloc_sum, self.b_rem)
-        if alloc_sum < int(alloc.sum()):
-            # scale down if still exceeded remaining budget
-            idx = np.argsort(-alloc)
-            over = int(alloc.sum()) - alloc_sum
+            over = alloc_sum - target_limit
             for j in idx:
                 d = min(over, int(alloc[j]))
                 alloc[j] -= d

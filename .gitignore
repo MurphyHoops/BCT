@@ -1,9 +1,10 @@
 # Byte-compiled / cache
-__pycache__/
+bct/__pycache__/*
 *.py[cod]
 *.pyo
 *.pyd
 
+*.pyc
 # Virtual environments
 .venv/
 env/

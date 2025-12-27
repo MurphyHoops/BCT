@@ -16,6 +16,7 @@ class BCTEngine:
         self.adapter = adapter
         self.config = config or {}
         self._node_index: Dict[str, int] = {}
+        self.fast_report = bool(self.config.get("fast_report", False))
 
         treasury_conf = dict(self.config.get("treasury", {}))
         if "b0" not in treasury_conf:
@@ -67,13 +68,10 @@ class BCTEngine:
         gains = np.zeros(n, dtype=float)
         static_risks = np.zeros(n, dtype=float)
         static_taxes = np.zeros(n, dtype=float)
-        isolated_mask = np.zeros(n, dtype=bool)
         metrics_list = [None] * n
-        decisions = [None] * n
+        hard_veto_mask = np.zeros(n, dtype=bool)
 
-        rho_b_val = self.treasury.rho_b()
         for idx, node_id in enumerate(candidates):
-            agent_id = agent_ids[idx]
             metric = metrics_by_id.get(node_id)
             if metric is None:
                 metric = self.adapter.evaluate_node(node_id, context)
@@ -82,29 +80,34 @@ class BCTEngine:
             gains[idx] = metric.predicted_gain
             static_risks[idx] = metric.static_risk
             static_taxes[idx] = metric.static_tax
+            hard_veto_mask[idx] = bool(metric.hard_veto)
 
-            decision = self.governor.check_safety(
-                agent_id=agent_id,
-                risk_val=metric.static_risk,
-                hard_veto=metric.hard_veto,
-                rho_b=rho_b_val,
-            )
-            decisions[idx] = decision
-            isolated_mask[idx] = decision.isolated
+        rho_b_val = self.treasury.rho_b()
+        isolated_mask, decisions = self.governor.batch_check_safety(
+            agent_ids=agent_ids,
+            risk_vals=static_risks,
+            hard_veto_mask=hard_veto_mask,
+            rho_b=rho_b_val,
+            return_decisions=not self.fast_report,
+        )
+        if decisions is None:
+            decisions = [None] * n
 
         scores = gains + 0.5 * reputations - 2.0 * static_risks - 1.0 * static_taxes
         scores[isolated_mask] = -1e12
 
-        per_node = {
-            node_id: {
-                "metric": metrics_list[idx],
-                "reputation": float(reputations[idx]),
-                "decision": decisions[idx],
-                "score": float(scores[idx]),
-                "agent_id": agent_ids[idx],
+        per_node = {}
+        if not self.fast_report:
+            per_node = {
+                node_id: {
+                    "metric": metrics_list[idx],
+                    "reputation": float(reputations[idx]),
+                    "decision": decisions[idx],
+                    "score": float(scores[idx]),
+                    "agent_id": agent_ids[idx],
+                }
+                for idx, node_id in enumerate(candidates)
             }
-            for idx, node_id in enumerate(candidates)
-        }
 
         allocations_arr, beta, phi, weights, entropy_val = self.treasury.allocate(
             scores=scores,
@@ -143,7 +146,7 @@ class BCTEngine:
             "allocations": allocations,
             "beta": beta,
             "phi": phi,
-            "weights": {nid: float(weights[id_to_index[nid]]) for nid in candidates},
+            "weights": {} if self.fast_report else {nid: float(weights[id_to_index[nid]]) for nid in candidates},
             "entropy": entropy_val,
             "execution_results": execution_results,
             "feedback": feedback_list,
